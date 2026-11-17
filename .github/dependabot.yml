@@ -1,0 +1,21 @@
+# Houdt de gepinde actions in de workflows van deze repo actueel,
+# inclusief commit-SHA en versiecommentaar.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Amsterdam
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: ci
+      include: scope

@@ -1,0 +1,52 @@
+# Dependabot-configuratie volgens project-standaard.
+# Kopieer naar .github/dependabot.yml in je project.
+#
+# Dit regelt de gewone versie-updates. Beveiligingsupdates komen los hiervan
+# meteen binnen, zonder afkoeltijd, zodra je "Dependabot security updates" in
+# de repo-instellingen aanzet.
+
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Amsterdam
+    # Neem een nieuwe release pas na een week over. Kwaadaardige of kapotte
+    # versies worden meestal binnen enkele dagen ontdekt en ingetrokken.
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    # Minor- en patch-updates samen in één PR; majors los, zodat brekende
+    # wijzigingen apart beoordeeld worden.
+    groups:
+      npm-minor-en-patch:
+        update-types:
+          - minor
+          - patch
+    # Conventional Commits: "chore(deps): ..." en "chore(deps-dev): ...".
+    commit-message:
+      prefix: chore
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Amsterdam
+    cooldown:
+      default-days: 7
+    # Werkt ook de commit-SHA's en versiecommentaren van gepinde actions bij.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    # Conventional Commits: "ci(deps): ...".
+    commit-message:
+      prefix: ci
+      include: scope

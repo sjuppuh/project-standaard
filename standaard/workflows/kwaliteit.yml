@@ -1,0 +1,37 @@
+# Aansluiten op project-standaard.
+# Kopieer naar .github/workflows/kwaliteit.yml in je project en vul de URL's in.
+# Zet alleen inputs die afwijken van de standaard, en zet bij een uitgezette
+# check altijd de reden erbij.
+
+name: Kwaliteit
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kwaliteit-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  kwaliteit:
+    name: Kwaliteit
+    # @v1 volgt automatisch de nieuwste v1.x van de standaard. Wil je elke
+    # update eerst als Dependabot-PR zien, pin dan op de commit-SHA van een
+    # release, met de versie als commentaar (bijvoorbeeld "# v1.0.0").
+    uses: sjuppuh/project-standaard/.github/workflows/kwaliteit.yml@v1
+    permissions:
+      contents: read
+    with:
+      urls: |
+        http://localhost:3000/
+      # Voorbeelden van afwijkingen:
+      # start-command: npx serve dist --listen 3000
+      # e2e-command: npm run test:e2e
+      # typecheck-command: ""   # JavaScript-project zonder typecheck

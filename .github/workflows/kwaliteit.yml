@@ -1,0 +1,653 @@
+# Herbruikbare kwaliteitsworkflow: de centrale standaard voor al mijn projecten.
+#
+# Aanroepen vanuit een project, in .github/workflows/kwaliteit.yml:
+#
+#   jobs:
+#     kwaliteit:
+#       uses: sjuppuh/project-standaard/.github/workflows/kwaliteit.yml@v1
+#       with:
+#         urls: |
+#           http://localhost:3000/
+#           http://localhost:3000/contact
+#
+# Elke job staat standaard aan en is uit te zetten met een run-*-input. Zie de
+# README voor alle inputs en de afspraken waaraan een project moet voldoen.
+
+name: Kwaliteit
+
+on:
+  workflow_call:
+    inputs:
+      # Omgeving
+      node-version:
+        description: Node.js-versie voor setup-node, bijvoorbeeld 24 of lts/*.
+        type: string
+        default: lts/*
+      cache:
+        description: Pakketbeheerder voor de dependency-cache (npm, pnpm of yarn). Leeg betekent geen cache.
+        type: string
+        default: npm
+
+      # Commando's. Een leeg commando slaat die stap over.
+      install-command:
+        description: Installeert de dependencies.
+        type: string
+        default: npm ci
+      lint-command:
+        description: Lint; leeg betekent overslaan.
+        type: string
+        default: npm run lint
+      typecheck-command:
+        description: Typecheck; leeg betekent overslaan.
+        type: string
+        default: npm run typecheck
+      test-command:
+        description: Unit-tests die een lcov-coveragerapport schrijven (zie coverage-file).
+        type: string
+        default: npm test -- --coverage
+      build-command:
+        description: Bouwt de app; leeg betekent overslaan.
+        type: string
+        default: npm run build
+      start-command:
+        description: Start de gebouwde app op de achtergrond. Leeg betekent dat de URL's al bereikbaar zijn, zoals bij een preview-deployment.
+        type: string
+        default: npm start
+      e2e-command:
+        description: Eigen Playwright-tests van het project. Draait voordat de standaard de app start, dus laat Playwright de server zelf starten via webServer. Leeg betekent overslaan.
+        type: string
+        default: ""
+
+      # De te testen app
+      urls:
+        description: Te testen URL's, gescheiden door spaties of regeleinden. Op de eerste URL wordt gewacht tot de app reageert.
+        type: string
+        default: http://localhost:3000/
+      start-timeout:
+        description: Maximaal aantal seconden wachten tot de app reageert.
+        type: number
+        default: 120
+
+      # Drempels
+      coverage-threshold:
+        description: Minimale lijndekking van de unit-tests, in procenten.
+        type: number
+        default: 70
+      coverage-file:
+        description: Pad naar het lcov-rapport dat het testcommando schrijft.
+        type: string
+        default: coverage/lcov.info
+      lighthouse-min-score:
+        description: Minimale Lighthouse-score (0-100) voor toegankelijkheid en best practices.
+        type: number
+        default: 90
+
+      # Security
+      audit-command:
+        description: Controleert dependencies op bekende kwetsbaarheden.
+        type: string
+        default: npm audit --audit-level=high
+      semgrep-config:
+        description: Semgrep-regelsets of -bestanden, gescheiden door spaties.
+        type: string
+        default: p/default
+
+      # Jobs aan of uit
+      run-lint:
+        description: Job lint en typecheck uitvoeren.
+        type: boolean
+        default: true
+      run-unit-tests:
+        description: Job unit-tests met coveragedrempel uitvoeren.
+        type: boolean
+        default: true
+      run-e2e:
+        description: Job end-to-end-tests en axe-core-scan uitvoeren.
+        type: boolean
+        default: true
+      run-lighthouse:
+        description: Job Lighthouse CI uitvoeren.
+        type: boolean
+        default: true
+      run-secrets-scan:
+        description: Job secrets-scan met gitleaks uitvoeren.
+        type: boolean
+        default: true
+      run-dependency-audit:
+        description: Job dependency-audit uitvoeren.
+        type: boolean
+        default: true
+      run-semgrep:
+        description: Job statische analyse met Semgrep uitvoeren.
+        type: boolean
+        default: true
+
+# Geen rechten op workflowniveau; elke job vraagt alleen wat hij nodig heeft.
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Versies van tools die niet via een action lopen. Dependabot ziet deze niet:
+  # werk ze bewust bij en kies een release die minstens een week oud is.
+  PLAYWRIGHT_VERSION: 1.65.0
+  AXE_CORE_VERSION: 4.14.0
+  AXE_PLAYWRIGHT_VERSION: 4.14.0
+  LHCI_VERSION: 0.16.0
+  SEMGREP_VERSION: 1.184.0
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+
+jobs:
+  lint:
+    name: Lint en typecheck
+    if: inputs.run-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Code ophalen
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node.js instellen
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.cache }}
+
+      - name: Dependencies installeren
+        env:
+          COMMAND: ${{ inputs.install-command }}
+        run: eval "$COMMAND"
+
+      - name: Lint
+        if: inputs.lint-command != ''
+        env:
+          COMMAND: ${{ inputs.lint-command }}
+        run: eval "$COMMAND"
+
+      - name: Typecheck
+        if: inputs.typecheck-command != ''
+        env:
+          COMMAND: ${{ inputs.typecheck-command }}
+        run: eval "$COMMAND"
+
+      # De build draait normaal in de e2e- en Lighthouse-jobs. Staan die allebei
+      # uit (bijvoorbeeld bij een library), dan wordt de build hier gecontroleerd.
+      - name: Build (alleen als e2e en Lighthouse uitstaan)
+        if: inputs.build-command != '' && !inputs.run-e2e && !inputs.run-lighthouse
+        env:
+          COMMAND: ${{ inputs.build-command }}
+        run: eval "$COMMAND"
+
+  unit-tests:
+    name: Unit-tests en coverage
+    if: inputs.run-unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Code ophalen
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node.js instellen
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.cache }}
+
+      - name: Dependencies installeren
+        env:
+          COMMAND: ${{ inputs.install-command }}
+        run: eval "$COMMAND"
+
+      - name: Unit-tests
+        env:
+          COMMAND: ${{ inputs.test-command }}
+        run: eval "$COMMAND"
+
+      - name: Coveragedrempel controleren
+        env:
+          COVERAGE_FILE: ${{ inputs.coverage-file }}
+          THRESHOLD: ${{ inputs.coverage-threshold }}
+        run: |
+          if [[ ! -f "$COVERAGE_FILE" ]]; then
+            echo "::error::Geen coverage-rapport gevonden op '$COVERAGE_FILE'. Laat de testrunner een lcov-rapport schrijven (zie de README van project-standaard)."
+            exit 1
+          fi
+
+          # Tel alle LF- (regels gevonden) en LH-records (regels geraakt) op.
+          read -r gevonden geraakt < <(awk -F: '$1 == "LF" { f += $2 } $1 == "LH" { h += $2 } END { print f + 0, h + 0 }' "$COVERAGE_FILE")
+          if (( gevonden == 0 )); then
+            echo "::error::Het coverage-rapport '$COVERAGE_FILE' bevat geen regels."
+            exit 1
+          fi
+          dekking=$(awk -v h="$geraakt" -v f="$gevonden" 'BEGIN { printf "%.2f", h / f * 100 }')
+
+          {
+            echo "### Coverage"
+            echo ""
+            echo "| Lijndekking | Drempel | Gedekte regels |"
+            echo "| --- | --- | --- |"
+            echo "| ${dekking}% | ${THRESHOLD}% | ${geraakt} van ${gevonden} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if awk -v d="$dekking" -v t="$THRESHOLD" 'BEGIN { exit !(d < t) }'; then
+            echo "::error::Lijndekking ${dekking}% ligt onder de drempel van ${THRESHOLD}%."
+            exit 1
+          fi
+          echo "Lijndekking ${dekking}% voldoet aan de drempel van ${THRESHOLD}%."
+
+  e2e:
+    name: E2E en toegankelijkheid (WCAG 2.2 AA)
+    if: inputs.run-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Code ophalen
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node.js instellen
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.cache }}
+
+      - name: Dependencies installeren
+        env:
+          COMMAND: ${{ inputs.install-command }}
+        run: eval "$COMMAND"
+
+      - name: Build
+        if: inputs.build-command != ''
+        env:
+          COMMAND: ${{ inputs.build-command }}
+        run: eval "$COMMAND"
+
+      - name: Playwright-browsers voor de projecttests installeren
+        if: inputs.e2e-command != ''
+        run: npx --no -- playwright install --with-deps
+
+      - name: E2E-tests van het project
+        if: inputs.e2e-command != ''
+        env:
+          COMMAND: ${{ inputs.e2e-command }}
+        run: eval "$COMMAND"
+
+      # De axe-scan draait in een eigen map met vastgepinde versies, los van de
+      # dependencies van het project. De bestanden staan hier inline, zodat ze
+      # altijd bij deze versie van de workflow horen.
+      - name: Toegankelijkheidsscan voorbereiden
+        run: |
+          mkdir -p "$RUNNER_TEMP/standaard-a11y"
+          cd "$RUNNER_TEMP/standaard-a11y"
+
+          cat > package.json <<'JSON'
+          { "name": "standaard-a11y", "private": true, "type": "module" }
+          JSON
+
+          cat > playwright.config.js <<'JS'
+          import { defineConfig, devices } from '@playwright/test';
+
+          export default defineConfig({
+            testDir: '.',
+            testMatch: 'a11y.spec.js',
+            forbidOnly: true,
+            retries: 0,
+            reporter: [['list'], ['html', { outputFolder: 'rapport', open: 'never' }]],
+            projects: [
+              { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
+              { name: 'mobiel', use: { ...devices['Pixel 7'] } },
+            ],
+          });
+          JS
+
+          cat > a11y.spec.js <<'JS'
+          // axe-core-scan op WCAG 2.2 AA. Elke overtreding, ongeacht de ernst, laat de test falen.
+          import { test, expect } from '@playwright/test';
+          import AxeBuilder from '@axe-core/playwright';
+
+          const WCAG_22_AA = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
+          const urls = (process.env.STANDAARD_URLS ?? '').split(/\s+/).filter(Boolean);
+
+          function beschrijf(overtredingen) {
+            return overtredingen
+              .map((o) => {
+                const elementen = o.nodes.map((n) => `      ${n.target.join(' ')}`).join('\n');
+                return `  [${o.impact}] ${o.id}: ${o.help}\n    ${o.helpUrl}\n${elementen}`;
+              })
+              .join('\n\n');
+          }
+
+          test('er is minstens een URL opgegeven', () => {
+            expect(urls.length, 'Geef via de input "urls" minstens een URL op.').toBeGreaterThan(0);
+          });
+
+          for (const url of urls) {
+            test(`WCAG 2.2 AA: ${url}`, async ({ page }, testInfo) => {
+              await page.goto(url, { waitUntil: 'load' });
+              // Laat client-side rendering afronden, zonder te blijven hangen op polling.
+              await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
+
+              const resultaten = await new AxeBuilder({ page }).withTags(WCAG_22_AA).analyze();
+              await testInfo.attach('axe-resultaten.json', {
+                body: JSON.stringify(resultaten, null, 2),
+                contentType: 'application/json',
+              });
+
+              const aantal = resultaten.violations.length;
+              const melding = `${aantal} WCAG-overtreding(en) op ${url}:\n\n${beschrijf(resultaten.violations)}`;
+              expect(aantal, melding).toBe(0);
+            });
+          }
+          JS
+
+          npm install --ignore-scripts --no-audit --no-fund --save-exact \
+            "@playwright/test@${PLAYWRIGHT_VERSION}" \
+            "@axe-core/playwright@${AXE_PLAYWRIGHT_VERSION}" \
+            "axe-core@${AXE_CORE_VERSION}"
+          npx --no -- playwright install --with-deps chromium
+
+      - name: App starten
+        env:
+          START_COMMAND: ${{ inputs.start-command }}
+          URLS: ${{ inputs.urls }}
+          START_TIMEOUT: ${{ inputs.start-timeout }}
+        run: |
+          eerste_url=$(awk 'NF { print $1; exit }' <<< "$URLS")
+          if [[ -z "$eerste_url" ]]; then
+            echo "::error::De input 'urls' is leeg."
+            exit 1
+          fi
+          if [[ -n "$START_COMMAND" ]]; then
+            nohup bash -c "$START_COMMAND" > "$RUNNER_TEMP/app.log" 2>&1 &
+          fi
+          echo "Wachten tot $eerste_url reageert (maximaal ${START_TIMEOUT}s)..."
+          deadline=$((SECONDS + START_TIMEOUT))
+          until curl --silent --output /dev/null --fail --max-time 5 "$eerste_url"; do
+            if (( SECONDS >= deadline )); then
+              echo "::error::De app reageerde niet binnen ${START_TIMEOUT}s op $eerste_url."
+              cat "$RUNNER_TEMP/app.log" 2>/dev/null || true
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "De app is bereikbaar."
+
+      - name: Toegankelijkheidsscan (axe-core, WCAG 2.2 AA)
+        working-directory: ${{ runner.temp }}/standaard-a11y
+        env:
+          STANDAARD_URLS: ${{ inputs.urls }}
+        run: npx --no -- playwright test
+
+      - name: Applog tonen
+        if: failure()
+        run: cat "$RUNNER_TEMP/app.log" 2>/dev/null || echo "Geen applog beschikbaar."
+
+      - name: Rapport toegankelijkheidsscan bewaren
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: toegankelijkheidsrapport
+          path: ${{ runner.temp }}/standaard-a11y/rapport
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Rapport e2e-tests van het project bewaren
+        if: failure() && inputs.e2e-command != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-rapport
+          path: playwright-report
+          retention-days: 14
+          if-no-files-found: ignore
+
+  lighthouse:
+    name: Lighthouse (toegankelijkheid en best practices)
+    if: inputs.run-lighthouse
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Code ophalen
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node.js instellen
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.cache }}
+
+      - name: Dependencies installeren
+        env:
+          COMMAND: ${{ inputs.install-command }}
+        run: eval "$COMMAND"
+
+      - name: Build
+        if: inputs.build-command != ''
+        env:
+          COMMAND: ${{ inputs.build-command }}
+        run: eval "$COMMAND"
+
+      - name: Lighthouse CI installeren
+        run: |
+          npm install --prefix "$RUNNER_TEMP/lhci" --ignore-scripts --no-audit --no-fund \
+            "@lhci/cli@${LHCI_VERSION}"
+
+      - name: App starten
+        env:
+          START_COMMAND: ${{ inputs.start-command }}
+          URLS: ${{ inputs.urls }}
+          START_TIMEOUT: ${{ inputs.start-timeout }}
+        run: |
+          eerste_url=$(awk 'NF { print $1; exit }' <<< "$URLS")
+          if [[ -z "$eerste_url" ]]; then
+            echo "::error::De input 'urls' is leeg."
+            exit 1
+          fi
+          if [[ -n "$START_COMMAND" ]]; then
+            nohup bash -c "$START_COMMAND" > "$RUNNER_TEMP/app.log" 2>&1 &
+          fi
+          echo "Wachten tot $eerste_url reageert (maximaal ${START_TIMEOUT}s)..."
+          deadline=$((SECONDS + START_TIMEOUT))
+          until curl --silent --output /dev/null --fail --max-time 5 "$eerste_url"; do
+            if (( SECONDS >= deadline )); then
+              echo "::error::De app reageerde niet binnen ${START_TIMEOUT}s op $eerste_url."
+              cat "$RUNNER_TEMP/app.log" 2>/dev/null || true
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "De app is bereikbaar."
+
+      - name: Lighthouse CI
+        env:
+          URLS: ${{ inputs.urls }}
+          MIN_SCORE: ${{ inputs.lighthouse-min-score }}
+        run: |
+          export LHCI_CONFIG="$RUNNER_TEMP/lighthouserc.json"
+          node <<'JS'
+          const fs = require('node:fs');
+          const urls = process.env.URLS.split(/\s+/).filter(Boolean);
+          const minScore = Number(process.env.MIN_SCORE) / 100;
+          const config = {
+            ci: {
+              collect: { url: urls, numberOfRuns: 1 },
+              assert: {
+                assertions: {
+                  'categories:accessibility': ['error', { minScore }],
+                  'categories:best-practices': ['error', { minScore }],
+                },
+              },
+            },
+          };
+          fs.writeFileSync(process.env.LHCI_CONFIG, JSON.stringify(config, null, 2));
+          JS
+          lhci="$RUNNER_TEMP/lhci/node_modules/.bin/lhci"
+          "$lhci" collect --config="$LHCI_CONFIG"
+          "$lhci" assert --config="$LHCI_CONFIG"
+
+      - name: Scores in de samenvatting zetten
+        if: always()
+        run: |
+          node <<'JS'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const map = '.lighthouseci';
+          if (!fs.existsSync(map)) process.exit(0);
+          const score = (lhr, id) => {
+            const categorie = lhr.categories[id];
+            return categorie && categorie.score !== null ? Math.round(categorie.score * 100) : '-';
+          };
+          const regels = [
+            '### Lighthouse',
+            '',
+            '| URL | Toegankelijkheid | Best practices | Prestaties | SEO |',
+            '| --- | --- | --- | --- | --- |',
+          ];
+          for (const bestand of fs.readdirSync(map).filter((f) => /^lhr-.*\.json$/.test(f))) {
+            const lhr = JSON.parse(fs.readFileSync(path.join(map, bestand), 'utf8'));
+            regels.push(`| ${lhr.requestedUrl} | ${score(lhr, 'accessibility')} | ${score(lhr, 'best-practices')} | ${score(lhr, 'performance')} | ${score(lhr, 'seo')} |`);
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, regels.join('\n') + '\n');
+          JS
+
+      - name: Applog tonen
+        if: failure()
+        run: cat "$RUNNER_TEMP/app.log" 2>/dev/null || echo "Geen applog beschikbaar."
+
+      - name: Lighthouse-rapporten bewaren
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lighthouse-rapport
+          path: .lighthouseci
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: ignore
+
+  secrets-scan:
+    name: Secrets (gitleaks)
+    if: inputs.run-secrets-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Code met volledige historie ophalen
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Gitleaks installeren (met checksumcontrole)
+        run: |
+          archief="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/$archief" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archief}"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archief" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$archief" -C "$RUNNER_TEMP" gitleaks
+
+      # Scant alle commits. Gevonden secrets worden in de log gemaskeerd.
+      # Een ingetrokken secret uit de historie negeer je via .gitleaksignore.
+      - name: Repository en historie scannen
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --no-banner --exit-code 1 .'
+
+  dependency-audit:
+    name: Dependency-audit
+    if: inputs.run-dependency-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Code ophalen
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node.js instellen
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          package-manager-cache: false
+
+      - name: Bekende kwetsbaarheden zoeken
+        env:
+          COMMAND: ${{ inputs.audit-command }}
+        run: eval "$COMMAND"
+
+  semgrep:
+    name: Statische analyse (Semgrep)
+    if: inputs.run-semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Code ophalen
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Semgrep
+        env:
+          SEMGREP_CONFIG: ${{ inputs.semgrep-config }}
+        run: |
+          read -r -d '' -a configs <<< "$SEMGREP_CONFIG" || true
+          args=()
+          for config in "${configs[@]}"; do
+            args+=(--config "$config")
+          done
+          pipx run --spec "semgrep==${SEMGREP_VERSION}" semgrep scan \
+            "${args[@]}" --error --metrics=off --disable-version-check
+
+  # Eén verplichte check voor branch protection: faalt als een ingeschakelde
+  # job faalt of wordt geannuleerd. Uitgeschakelde jobs tellen als geslaagd.
+  kwaliteitspoort:
+    name: Kwaliteitspoort
+    if: always()
+    needs:
+      - lint
+      - unit-tests
+      - e2e
+      - lighthouse
+      - secrets-scan
+      - dependency-audit
+      - semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Uitkomsten beoordelen
+        env:
+          UITKOMSTEN: ${{ toJSON(needs) }}
+        run: |
+          {
+            echo "### Kwaliteitspoort"
+            echo ""
+            echo "| Check | Uitkomst |"
+            echo "| --- | --- |"
+            jq -r 'to_entries[] | "| \(.key) | \(.value.result) |"' <<< "$UITKOMSTEN"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if jq -e 'any(.[]; .result == "failure" or .result == "cancelled")' <<< "$UITKOMSTEN" > /dev/null; then
+            echo "::error::Niet alle kwaliteitschecks zijn geslaagd. Zie de samenvatting van deze run."
+            exit 1
+          fi
+          echo "Alle ingeschakelde checks zijn geslaagd."

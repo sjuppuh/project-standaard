@@ -1,0 +1,57 @@
+# Controleert deze repo zelf: de workflows met actionlint (inclusief
+# shellcheck voor de inline scripts) en de repo met de eigen standaard.
+
+name: Zelftest
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: zelftest-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  actionlint:
+    name: Workflows controleren (actionlint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - name: Code ophalen
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: actionlint installeren (met checksumcontrole)
+        run: |
+          archief="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/$archief" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archief}"
+          echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/$archief" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$archief" -C "$RUNNER_TEMP" actionlint
+
+      - name: actionlint
+        run: '"$RUNNER_TEMP/actionlint" -color .github/workflows/*.yml standaard/workflows/*.yml'
+
+  standaard:
+    name: Eigen standaard
+    uses: ./.github/workflows/kwaliteit.yml
+    permissions:
+      contents: read
+    with:
+      # Deze repo bevat geen Node.js-project; alleen de security-scans zijn zinvol.
+      run-lint: false
+      run-unit-tests: false
+      run-e2e: false
+      run-lighthouse: false
+      run-dependency-audit: false
